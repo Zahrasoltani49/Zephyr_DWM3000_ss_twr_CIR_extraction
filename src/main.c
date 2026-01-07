@@ -62,9 +62,8 @@ static uint8_t rx_resp_msg[] = {0x41, 0x88, 0, 0xCA, 0xDE, 'T', 1, 'A', 1, '2', 
 #define RESP_MSG_POLL_RX_TS_IDX 10
 #define RESP_MSG_RESP_TX_TS_IDX 14
 #define RESP_MSG_TS_LEN 4
-#define POLL_MSG_ANCHOR_ADDR_IDX 6
-#define RESP_MSG_ANCHOR_ADDR_IDX 8
-uint8_t i;
+// #define POLL_MSG_ANCHOR_ADDR_IDX 6
+// #define RESP_MSG_ANCHOR_ADDR_IDX 8
 float distances_storage[5];
 static uint8_t frame_seq_nb = 0;
 
@@ -97,14 +96,30 @@ static dwt_txconfig_t txconfig =
 
 /* part of the code for extracting features based on the register map
 **************************************************************************** */
-
+dwt_rxdiag_t diagnostics;
+dwt_nlos_alldiag_t nlos_diagnostics;
 uint8_t systemEnable[4];
 uint8_t systemStatus[20];
 uint8_t header[2];
+uint8_t volatile clk_ctl[4];
 
 uint8_t read_buffer_size = 4;
 uint8_t h_size = sizeof(header);
 
+#define CLK_CTRL_BASE_ADDRESS 0x11
+#define CLK_CTRL_SUB_ADDRESS 0x04
+#define MINIDIAG_BIT_BASE_ADDRESS 0x0E
+#define MINIDIAG_BIT_SUB_ADDRESS 0x00
+#define FP1_BASE_ADDRESS 0x0C
+#define FP1_SUB_ADDRESS 0x30
+#define RXPACC_BASE_ADDRESS 0x00
+#define RXPACC_SUB_ADDRESS 0x4C
+#define IPNACC_BASE_ADDRESS 0x0C
+#define IPNACC_SUB_ADDRESS 0x58
+uint8_t ipnacc[4];
+uint8_t rxpacc[4];
+uint8_t fp1[4];
+uint8_t minidiag[4];
 
 void i2c_header(char status[], uint8_t base_address, uint8_t sub_address)
 {
@@ -137,10 +152,24 @@ void i2c_header(char status[], uint8_t base_address, uint8_t sub_address)
 }
 /*
 
+
+
 **************************************************************************************** */
+void ACC_CLK_ENABLE(void)
+{
+        i2c_header("READ", CLK_CTRL_BASE_ADDRESS, CLK_CTRL_SUB_ADDRESS);
+        dw3000_spi_read(h_size, header, read_buffer_size, clk_ctl);
+
+        clk_ctl[0] |= 0x40; // set bit 6 to 1
+        clk_ctl[1] |= 0x80; // set bit 15 to 1
+
+        i2c_header("WRITE", CLK_CTRL_BASE_ADDRESS, CLK_CTRL_SUB_ADDRESS);
+        dw3000_spi_write(h_size, header, read_buffer_size, clk_ctl);
+}
 
 int main(void)
 {
+        //   dwt_readaccdata();
 
         LOG_ERR("Welcome ss twr Initiator ");
         // uint8_t header[2];
@@ -203,126 +232,156 @@ int main(void)
         // i2c_header("READ", RXPACC_BASE_ADDRESS, RXPACC_SUB_ADDRESS); // RxPACC
         /* Next can enable TX/RX states output on GPIOs 5 and 6 to help debug, and also TX/RX LEDs
          * Note, in real low power applications the LEDs should not be used. */
-        for (i = 1; i <= NUMBER_OF_ANCHORS; i++)
+
+        ACC_CLK_ENABLE();
+        dwt_configciadiag(1);
+        // for (i = 1; i <= NUMBER_OF_ANCHORS; i++)
+        // {
+
+        //         if (i == 1)
+        //                 printk("['\n");
+
+        /* Loop forever initiating ranging exchanges. */
+        while (1)
         {
+                LOG_ERR("in while loop");
+                // tx_poll_msg[POLL_MSG_ANCHOR_ADDR_IDX] = i;
+                // rx_resp_msg[RESP_MSG_ANCHOR_ADDR_IDX] = i;
+                /* Write frame data to DW IC and prepare transmission. See NOTE 7 below. */
+                tx_poll_msg[ALL_MSG_SN_IDX] = frame_seq_nb;
 
-                if (i == 1)
-                        printk("['\n");
+                // i2c_header("READ", 0x00, 0x44);
+                // ret = dw3000_spi_read(h_size, header, read_buffer_size, systemStatus);
+                // k_msleep(5);
+                //  LOG_INF("systemStatus before writing is = %d,%d,%d,%d", systemStatus[0] | systemStatus[1] << 8 | systemStatus[2] << 16 | systemStatus[3] << 24);
 
-                /* Loop forever initiating ranging exchanges. */
-                while (1)
+                dwt_writesysstatuslo(DWT_INT_TXFRS_BIT_MASK);
+
+                ret = dwt_writetxdata(sizeof(tx_poll_msg), tx_poll_msg, 0); /* Zero offset in TX buffer. */
+                // if (ret == DWT_SUCCESS)
+                //         LOG_INF("dwt_writetxdata  DONE");
+                // else
+                //         LOG_ERR("dwt_writetxdata  FAILED");
+
+                dwt_writetxfctrl(sizeof(tx_poll_msg), 0, 1); /* Zero offset in TX buffer, ranging. */
+
+                /* Start transmission, indicating that a response is expected so that reception is enabled automatically after the frame is sent and the delay
+                 * set by dwt_setrxaftertxdelay() has elapsed. */
+                ret = dwt_starttx(DWT_START_TX_IMMEDIATE | DWT_RESPONSE_EXPECTED);
+
+                // if (ret == DWT_SUCCESS)
+                //         LOG_INF("send  DONE");
+                // // else
+                // //         LOG_ERR("send  FAILED");
+
+                // dwt_rxenable(DWT_START_RX_IMMEDIATE);
+                /* We assume that the transmission is achieved correctly, poll for reception of a frame or error/timeout. See NOTE 8 below. */
+                waitforsysstatus(&status_reg, NULL, (DWT_INT_RXFCG_BIT_MASK | SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR), 0);
+                // LOG_INF("status is = %d", status_reg);
+                /* Increment frame sequence number after transmission of the poll message (modulo 256). */
+                frame_seq_nb++;
+                if (status_reg & DWT_INT_RXFCG_BIT_MASK)
                 {
-                        tx_poll_msg[POLL_MSG_ANCHOR_ADDR_IDX] = i;
-                        rx_resp_msg[RESP_MSG_ANCHOR_ADDR_IDX] = i;
-                        /* Write frame data to DW IC and prepare transmission. See NOTE 7 below. */
-                        tx_poll_msg[ALL_MSG_SN_IDX] = frame_seq_nb;
+                        // LOG_INF("inside the if");
+                        uint16_t frame_len;
+                        /* Clear good RX frame event in the DW IC status register. */
+                        dwt_writesysstatuslo(DWT_INT_RXFCG_BIT_MASK);
 
-                        // i2c_header("READ", 0x00, 0x44);
-                        // ret = dw3000_spi_read(h_size, header, read_buffer_size, systemStatus);
-                        // k_msleep(5);
-                        //  LOG_INF("systemStatus before writing is = %d,%d,%d,%d", systemStatus[0] | systemStatus[1] << 8 | systemStatus[2] << 16 | systemStatus[3] << 24);
+                        dwt_writesysstatuslo(DWT_INT_RXPHD_BIT_MASK);
+                        uint16_t status2 = dwt_readsysstatuslo();
+                        // LOG_INF("status 2: %d", status2);
+                        /* A frame has been received, read it into the local buffer. */
+                        frame_len = dwt_getframelength();
 
-                        dwt_writesysstatuslo(DWT_INT_TXFRS_BIT_MASK);
-
-                        ret = dwt_writetxdata(sizeof(tx_poll_msg), tx_poll_msg, 0); /* Zero offset in TX buffer. */
-                        // if (ret == DWT_SUCCESS)
-                        //         LOG_INF("dwt_writetxdata  DONE");
-                        // else
-                        //         LOG_ERR("dwt_writetxdata  FAILED");
-
-                        dwt_writetxfctrl(sizeof(tx_poll_msg), 0, 1); /* Zero offset in TX buffer, ranging. */
-
-                        /* Start transmission, indicating that a response is expected so that reception is enabled automatically after the frame is sent and the delay
-                         * set by dwt_setrxaftertxdelay() has elapsed. */
-                        ret = dwt_starttx(DWT_START_TX_IMMEDIATE | DWT_RESPONSE_EXPECTED);
-
-                        // if (ret == DWT_SUCCESS)
-                        //         LOG_INF("send  DONE");
-                        // // else
-                        // //         LOG_ERR("send  FAILED");
-
-                        // dwt_rxenable(DWT_START_RX_IMMEDIATE);
-                        /* We assume that the transmission is achieved correctly, poll for reception of a frame or error/timeout. See NOTE 8 below. */
-                        waitforsysstatus(&status_reg, NULL, (DWT_INT_RXFCG_BIT_MASK | SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR), 0);
-                        // LOG_INF("status is = %d", status_reg);
-                        /* Increment frame sequence number after transmission of the poll message (modulo 256). */
-                        frame_seq_nb++;
-                        if (status_reg & DWT_INT_RXFCG_BIT_MASK)
+                        if (frame_len <= sizeof(rx_buffer))
                         {
-                                // LOG_INF("inside the if");
-                                uint16_t frame_len;
-                                /* Clear good RX frame event in the DW IC status register. */
-                                dwt_writesysstatuslo(DWT_INT_RXFCG_BIT_MASK);
+                                dwt_readrxdata(rx_buffer, frame_len, 0);
 
-                                dwt_writesysstatuslo(DWT_INT_RXPHD_BIT_MASK);
-                                uint16_t status2 = dwt_readsysstatuslo();
-                                // LOG_INF("status 2: %d", status2);
-                                /* A frame has been received, read it into the local buffer. */
-                                frame_len = dwt_getframelength();
-
-                                if (frame_len <= sizeof(rx_buffer))
+                                rx_buffer[ALL_MSG_SN_IDX] = 0;
+                                if (memcmp(rx_buffer, rx_resp_msg, ALL_MSG_COMMON_LEN) == 0)
                                 {
-                                        dwt_readrxdata(rx_buffer, frame_len, 0);
+                                        dwt_readdiagnostics(&diagnostics);
 
-                                        rx_buffer[ALL_MSG_SN_IDX] = 0;
-                                        if (memcmp(rx_buffer, rx_resp_msg, ALL_MSG_COMMON_LEN) == 0)
-                                        {
+                                        
 
-                                                uint32_t poll_tx_ts, resp_rx_ts, poll_rx_ts, resp_tx_ts;
-                                                int32_t rtd_init, rtd_resp;
-                                                float clockOffsetRatio;
-                                                /* Retrieve poll transmission and response reception timestamps. See NOTE 9 below. */
-                                                poll_tx_ts = dwt_readtxtimestamplo32();
-                                                resp_rx_ts = dwt_readrxtimestamplo32();
+                                        dwt_nlos_alldiag(&nlos_diagnostics);
 
-                                                /* Read carrier integrator value and calculate clock offset ratio. See NOTE 11 below. */
-                                                clockOffsetRatio = ((float)dwt_readclockoffset()) / (uint32_t)(1 << 26);
+                                        
 
-                                                /* Get timestamps embedded in response message. */
-                                                resp_msg_get_ts(&rx_buffer[RESP_MSG_POLL_RX_TS_IDX], &poll_rx_ts);
-                                                resp_msg_get_ts(&rx_buffer[RESP_MSG_RESP_TX_TS_IDX], &resp_tx_ts);
+                                        i2c_header("READ", FP1_BASE_ADDRESS, FP1_SUB_ADDRESS);
+                                        dw3000_spi_read(h_size, header, read_buffer_size, fp1); // fp1
 
-                                                /* Compute time of flight and distance, using clock offset ratio to correct for differing local and remote clock rates */
-                                                rtd_init = resp_rx_ts - poll_tx_ts;
-                                                rtd_resp = resp_tx_ts - poll_rx_ts;
+                                        k_msleep(5);
+                                        printf("f1 3 = %d\n", fp1[0] | fp1[1] << 8 | fp1[2] << 16 | fp1[3] << 24);
 
-                                                tof = ((rtd_init - rtd_resp * (1 - clockOffsetRatio)) / 2.0) * DWT_TIME_UNITS;
-                                                distance = tof * SPEED_OF_LIGHT;
-                                                // distance = distance * 100; // convert to cm
-                                                /* Display computed distance on LCD. */
-                                                // printf("DIST %d: %3.2f\n", i, distance);
+                                        i2c_header("READ", RXPACC_BASE_ADDRESS, RXPACC_SUB_ADDRESS); // RxPACC
+                                        dw3000_spi_read(h_size, header, read_buffer_size, rxpacc);
+                                        k_msleep(5);
+                                        uint32_t reg32 =
+                                            ((uint32_t)rxpacc[0]) |
+                                            ((uint32_t)rxpacc[1] << 8) |
+                                            ((uint32_t)rxpacc[2] << 16) |
+                                            ((uint32_t)rxpacc[3] << 24);
 
-                                                printk("{'anchor_ID': 0x0%d ,'FP1': %d , 'FP2': %d , 'FP3': %d , 'rxpacc': %d , 'maxgrowth': %d , 'distance': %3.3f}\n ", i, data_raspberryPi_sample.fp1_raspberryPi,
-                                                       data_raspberryPi_sample.fp2_raspberryPi, data_raspberryPi_sample.fp3_raspberryPi, data_raspberryPi_sample.rxpacc_raspberryPi,
-                                                       data_raspberryPi_sample.maxgrowth_raspberryPi, distance);
+                                        uint16_t rxpaccnew = (reg32 >> 20) & 0x0FFF;
+                                        printf("rxpacc = %d\n", rxpaccnew);
 
-                                                distances_storage[i] = distance;
-                                                if (i < NUMBER_OF_ANCHORS)
-                                                {
-                                                        printk(",\n"); // comma between items
-                                                }
-                                                if (i == NUMBER_OF_ANCHORS)
-                                                {
-                                                        i = 0;
-                                                        printk("\n']\n");
-                                                        k_msleep(1000);
-                                                        // printf("Distance 1: %3.2f, Distance 2: %3.2f, Distance 3: %3.2f \n", distances_storage[1], distances_storage[2], distances_storage[3]);
-                                                }
+                                        i2c_header("READ", IPNACC_BASE_ADDRESS, IPNACC_SUB_ADDRESS); // RxPACC
+                                        dw3000_spi_read(h_size, header, read_buffer_size, ipnacc);
+                                        k_msleep(5);
+                                         uint32_t reg322 =
+                                            ((uint32_t)ipnacc[0]) |
+                                            ((uint32_t)ipnacc[1] << 8) |
+                                            ((uint32_t)ipnacc[2] << 16) |
+                                            ((uint32_t)ipnacc[3] << 24);
+                                        uint16_t ip = reg322 & 0x0FFF;
+                                        printf("ipnacc2 = %d\n", ip);
+                                        printf("RXPACC NEW 2 = %d\n", nlos_diagnostics.accumCount);
+                                        printf("LAST = %d\n", diagnostics.ipatovAccumCount);
 
-                                                k_msleep(50);
-                                                break;
-                                        }
+                                        uint32_t poll_tx_ts, resp_rx_ts, poll_rx_ts, resp_tx_ts;
+                                        int32_t rtd_init, rtd_resp;
+                                        float clockOffsetRatio;
+                                        /* Retrieve poll transmission and response reception timestamps. See NOTE 9 below. */
+                                        poll_tx_ts = dwt_readtxtimestamplo32();
+                                        resp_rx_ts = dwt_readrxtimestamplo32();
+
+                                        /* Read carrier integrator value and calculate clock offset ratio. See NOTE 11 below. */
+                                        clockOffsetRatio = ((float)dwt_readclockoffset()) / (uint32_t)(1 << 26);
+
+                                        /* Get timestamps embedded in response message. */
+                                        resp_msg_get_ts(&rx_buffer[RESP_MSG_POLL_RX_TS_IDX], &poll_rx_ts);
+                                        resp_msg_get_ts(&rx_buffer[RESP_MSG_RESP_TX_TS_IDX], &resp_tx_ts);
+
+                                        /* Compute time of flight and distance, using clock offset ratio to correct for differing local and remote clock rates */
+                                        rtd_init = resp_rx_ts - poll_tx_ts;
+                                        rtd_resp = resp_tx_ts - poll_rx_ts;
+
+                                        tof = ((rtd_init - rtd_resp * (1 - clockOffsetRatio)) / 2.0) * DWT_TIME_UNITS;
+                                        distance = tof * SPEED_OF_LIGHT;
+                                        //   dwt_nlos_alldiag(&nlos_diagnostics);
+                                        //    printf("ipatovAccumCount2 = %d\n", nlos_diagnostics.accumCount);
+
+                                        // distance = distance * 100; // convert to cm
+                                        /* Display computed distance on LCD. */
+                                        // printf("DIST %d: %3.2f\n", i, distance);
+
+                                        // printk();
+
+                                        k_msleep(50);
+                                        // break;
                                 }
                         }
-
-                        else
-                        {
-                                /* Clear RX error/timeout events in the DW IC status register. */
-                                dwt_writesysstatuslo(SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
-                        }
-
-                        /* Execute a delay between ranging exchanges. */
-                        k_msleep(RNG_DELAY_MS);
                 }
+
+                else
+                {
+                        /* Clear RX error/timeout events in the DW IC status register. */
+                        dwt_writesysstatuslo(SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
+                }
+
+                /* Execute a delay between ranging exchanges. */
+                k_msleep(RNG_DELAY_MS);
         }
 }
+// }
