@@ -98,6 +98,7 @@ static dwt_txconfig_t txconfig =
 **************************************************************************** */
 dwt_rxdiag_t diagnostics;
 dwt_nlos_alldiag_t nlos_diagnostics;
+dwt_nlos_ipdiag_t ipdiag;
 uint8_t systemEnable[4];
 uint8_t systemStatus[20];
 uint8_t header[2];
@@ -116,10 +117,17 @@ uint8_t h_size = sizeof(header);
 #define RXPACC_SUB_ADDRESS 0x4C
 #define IPNACC_BASE_ADDRESS 0x0C
 #define IPNACC_SUB_ADDRESS 0x58
+#define IP_DIAG_0_BASE_ADDRESS 0x0C
+#define IP_DIAG_0_SUB_ADDRESS 0x28
+uint32_t reg32;
 uint8_t ipnacc[4];
+uint8_t ippeak[4];
 uint8_t rxpacc[4];
 uint8_t fp1[4];
 uint8_t minidiag[4];
+uint16_t acc_offset = 0;
+uint16_t cir_len = 10 * 6 + 1; // 10 symbols of 6 bytes each +1 extra byte
+uint8_t cir_buffer[61];
 
 void i2c_header(char status[], uint8_t base_address, uint8_t sub_address)
 {
@@ -302,42 +310,61 @@ int main(void)
                                 {
                                         dwt_readdiagnostics(&diagnostics);
 
-                                        
-
                                         dwt_nlos_alldiag(&nlos_diagnostics);
 
-                                        
+                                        dwt_nlos_ipdiag(&ipdiag);
 
                                         i2c_header("READ", FP1_BASE_ADDRESS, FP1_SUB_ADDRESS);
                                         dw3000_spi_read(h_size, header, read_buffer_size, fp1); // fp1
 
                                         k_msleep(5);
-                                        printf("f1 3 = %d\n", fp1[0] | fp1[1] << 8 | fp1[2] << 16 | fp1[3] << 24);
+                                        printf("f1  = %d\n", (fp1[0] | fp1[1] << 8 | fp1[2] << 16 | fp1[3] << 24) / 4);
 
-                                        i2c_header("READ", RXPACC_BASE_ADDRESS, RXPACC_SUB_ADDRESS); // RxPACC
-                                        dw3000_spi_read(h_size, header, read_buffer_size, rxpacc);
-                                        k_msleep(5);
-                                        uint32_t reg32 =
-                                            ((uint32_t)rxpacc[0]) |
-                                            ((uint32_t)rxpacc[1] << 8) |
-                                            ((uint32_t)rxpacc[2] << 16) |
-                                            ((uint32_t)rxpacc[3] << 24);
+                                        uint32_t check_ciaDone = dwt_readsysstatuslo();
+                                        printf("CIADONE in system status is  = %d\n", (check_ciaDone >> 10) & 0x01);
 
-                                        uint16_t rxpaccnew = (reg32 >> 20) & 0x0FFF;
-                                        printf("rxpacc = %d\n", rxpaccnew);
-
-                                        i2c_header("READ", IPNACC_BASE_ADDRESS, IPNACC_SUB_ADDRESS); // RxPACC
+                                        i2c_header("READ", IPNACC_BASE_ADDRESS, IPNACC_SUB_ADDRESS); // RxPACC = IPNACC
                                         dw3000_spi_read(h_size, header, read_buffer_size, ipnacc);
                                         k_msleep(5);
-                                         uint32_t reg322 =
+                                        reg32 =
                                             ((uint32_t)ipnacc[0]) |
                                             ((uint32_t)ipnacc[1] << 8) |
                                             ((uint32_t)ipnacc[2] << 16) |
                                             ((uint32_t)ipnacc[3] << 24);
-                                        uint16_t ip = reg322 & 0x0FFF;
-                                        printf("ipnacc2 = %d\n", ip);
-                                        printf("RXPACC NEW 2 = %d\n", nlos_diagnostics.accumCount);
-                                        printf("LAST = %d\n", diagnostics.ipatovAccumCount);
+                                        uint16_t ip = reg32 & 0x0FFF;
+
+                                        i2c_header("READ", IP_DIAG_0_BASE_ADDRESS, IP_DIAG_0_SUB_ADDRESS); // Peak path index
+                                        dw3000_spi_read(h_size, header, read_buffer_size, ippeak);
+                                        k_msleep(5);
+                                        reg32 =
+                                            ((uint32_t)ippeak[0]) |
+                                            ((uint32_t)ippeak[1] << 8) |
+                                            ((uint32_t)ippeak[2] << 16) |
+                                            ((uint32_t)ippeak[3] << 24);
+
+                                        uint16_t ipk = (reg32 >> 21) & 0x03FF;
+
+                                        // extracted RXPACC via 3 different  ways to cross verify
+                                        printf("IPNACC_manually = %d\n", ip);                                   // Extracted manually by myself
+                                        printf("RXPACC_nlos_structure = %d\n", nlos_diagnostics.accumCount);    // extracted from dwt_nlos_alldiag_t structure,  should be same as ip extracted manually
+                                        printf("RXPACC_rxdiag_structure = %d\n", diagnostics.ipatovAccumCount); // extracted from dwt_rxdiag_t structure, should be same as ip extracted manually
+
+                                        // extracted first path index from dwt_rxdiag_t structure
+                                        printf("first path index = %d\n", diagnostics.ipatovFpIndex / 64);
+
+                                        // extracted peak path index from dwt_nlos_ipdiag_t structure and manually to cross verify
+                                        // peak path and first path shoul dbe similar
+                                        printf("Peak path index = %d\n", ipk);
+                                        printf("Peak path index_driver = %d\n", ipdiag.index_pp_u32 / 64);
+
+                                        // reading CIR data
+                                        dwt_readaccdata(&cir_buffer, cir_len, acc_offset);
+                                        k_msleep(5);
+                                        uint32_t cir_sample0_real = cir_buffer[1] | (cir_buffer[2] << 8) | (cir_buffer[3] << 16);
+                                        uint32_t real_value = cir_sample0_real & 0x0003FFFF;
+                                        uint32_t cir_sample0_img = cir_buffer[4] | (cir_buffer[5] << 8) | (cir_buffer[6] << 16);
+                                        uint32_t img_value = cir_sample0_img & 0x0003FFFF;
+                                        printf("first CIR sample = %d + %dj\n", real_value, img_value);
 
                                         uint32_t poll_tx_ts, resp_rx_ts, poll_rx_ts, resp_tx_ts;
                                         int32_t rtd_init, rtd_resp;
