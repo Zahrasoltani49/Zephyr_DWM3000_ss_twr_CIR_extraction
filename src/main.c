@@ -308,24 +308,6 @@ int main(void)
                                 rx_buffer[ALL_MSG_SN_IDX] = 0;
                                 if (memcmp(rx_buffer, rx_resp_msg, ALL_MSG_COMMON_LEN) == 0)
                                 {
-                                        // reading CIR data
-
-                                        // for (int i = 1; i < 10; i*6+1) {
-                                        dwt_readaccdata(cir_buffer, cir_len, acc_offset);
-                                        k_msleep(2);
-                                        uint32_t cir_sample0_real = cir_buffer[1] | (cir_buffer[2] << 8) | (cir_buffer[3] << 16);
-                                        uint32_t real_value = cir_sample0_real & 0x03FFFF;
-                                        uint8_t real_sign = (cir_sample0_real & 0xFC0000) >> 18;
-
-                                        uint32_t cir_sample0_img = cir_buffer[4] | (cir_buffer[5] << 8) | (cir_buffer[6] << 16);
-                                        uint32_t img_value = cir_sample0_img & 0x03FFFF;
-                                        uint8_t img_sign = (cir_sample0_img & 0xFC0000) >> 18;
-
-                                        real_sign = (real_sign != 0) ? 45 : 43; // 45 decimal is char '-' and 43 deciml is char '+' # 1 negative 0 positive
-                                        img_sign = (img_sign != 0) ? 45 : 43;   // 45 decimal is char '-' and 43 deciml is char '+'
-                                        printf("first CIR sample = %d and %dj\n", cir_sample0_real, cir_sample0_img);
-
-                                        printf("first CIR sample = %c %d %c %dj\n", real_sign, real_value, img_sign, img_value);
 
                                         dwt_readdiagnostics(&diagnostics);
 
@@ -375,6 +357,19 @@ int main(void)
                                         // peak path and first path shoul dbe similar
                                         printf("Peak path index = %d\n", ipk);
                                         printf("Peak path index_driver = %d\n", ipdiag.index_pp_u32 / 64);
+
+                                        // reading CIR data
+                                        // for (int i = 1; i < 10; i*6+1) {
+                                        dwt_readaccdata(cir_buffer, cir_len, acc_offset);
+                                        k_msleep(2);
+
+                                        uint32_t raw_real = cir_buffer[1] | (cir_buffer[2] << 8) | (cir_buffer[3] << 16);
+                                        int32_t real_signed = (int32_t)(raw_real << 8) >> 8; // convert it to a signed integer to preserve the sign of the value using arithmic shift and casting
+
+                                        uint32_t raw_img = cir_buffer[4] | (cir_buffer[5] << 8) | (cir_buffer[6] << 16);
+                                        int32_t img_signed = (int32_t)(raw_img << 8) >> 8; // convert it to a signed integer to preserve the sign of the value using arithmic shift and casting
+
+                                        printf("first CIR sample = %d + %dj\n", real_signed, img_signed);
 
                                         uint32_t poll_tx_ts, resp_rx_ts, poll_rx_ts, resp_tx_ts;
                                         int32_t rtd_init, rtd_resp;
