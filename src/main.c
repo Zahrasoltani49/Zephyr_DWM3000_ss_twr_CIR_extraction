@@ -102,7 +102,7 @@ dwt_nlos_ipdiag_t ipdiag;
 uint8_t systemEnable[4];
 uint8_t systemStatus[20];
 uint8_t header[2];
-uint8_t volatile clk_ctl[4];
+uint8_t clk_ctl[4];
 
 uint8_t read_buffer_size = 4;
 uint8_t h_size = sizeof(header);
@@ -308,6 +308,25 @@ int main(void)
                                 rx_buffer[ALL_MSG_SN_IDX] = 0;
                                 if (memcmp(rx_buffer, rx_resp_msg, ALL_MSG_COMMON_LEN) == 0)
                                 {
+                                        // reading CIR data
+
+                                        // for (int i = 1; i < 10; i*6+1) {
+                                        dwt_readaccdata(cir_buffer, cir_len, acc_offset);
+                                        k_msleep(2);
+                                        uint32_t cir_sample0_real = cir_buffer[1] | (cir_buffer[2] << 8) | (cir_buffer[3] << 16);
+                                        uint32_t real_value = cir_sample0_real & 0x03FFFF;
+                                        uint8_t real_sign = (cir_sample0_real & 0xFC0000) >> 18;
+
+                                        uint32_t cir_sample0_img = cir_buffer[4] | (cir_buffer[5] << 8) | (cir_buffer[6] << 16);
+                                        uint32_t img_value = cir_sample0_img & 0x03FFFF;
+                                        uint8_t img_sign = (cir_sample0_img & 0xFC0000) >> 18;
+
+                                        real_sign = (real_sign != 0) ? 45 : 43; // 45 decimal is char '-' and 43 deciml is char '+' # 1 negative 0 positive
+                                        img_sign = (img_sign != 0) ? 45 : 43;   // 45 decimal is char '-' and 43 deciml is char '+'
+                                        printf("first CIR sample = %d and %dj\n", cir_sample0_real, cir_sample0_img);
+
+                                        printf("first CIR sample = %c %d %c %dj\n", real_sign, real_value, img_sign, img_value);
+
                                         dwt_readdiagnostics(&diagnostics);
 
                                         dwt_nlos_alldiag(&nlos_diagnostics);
@@ -356,15 +375,6 @@ int main(void)
                                         // peak path and first path shoul dbe similar
                                         printf("Peak path index = %d\n", ipk);
                                         printf("Peak path index_driver = %d\n", ipdiag.index_pp_u32 / 64);
-
-                                        // reading CIR data
-                                        dwt_readaccdata(&cir_buffer, cir_len, acc_offset);
-                                        k_msleep(5);
-                                        uint32_t cir_sample0_real = cir_buffer[1] | (cir_buffer[2] << 8) | (cir_buffer[3] << 16);
-                                        uint32_t real_value = cir_sample0_real & 0x0003FFFF;
-                                        uint32_t cir_sample0_img = cir_buffer[4] | (cir_buffer[5] << 8) | (cir_buffer[6] << 16);
-                                        uint32_t img_value = cir_sample0_img & 0x0003FFFF;
-                                        printf("first CIR sample = %d + %dj\n", real_value, img_value);
 
                                         uint32_t poll_tx_ts, resp_rx_ts, poll_rx_ts, resp_tx_ts;
                                         int32_t rtd_init, rtd_resp;
