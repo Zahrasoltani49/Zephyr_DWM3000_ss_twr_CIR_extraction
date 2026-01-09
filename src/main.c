@@ -126,8 +126,11 @@ uint8_t rxpacc[4];
 uint8_t fp1[4];
 uint8_t minidiag[4];
 uint16_t acc_offset = 0;
-uint16_t cir_len = 10 * 6 + 1; // 10 symbols of 6 bytes each +1 extra byte
-uint8_t cir_buffer[61];
+#define SAMPLE_NUMBER 500
+uint16_t cir_len = 501; // 10 samples of 6 bytes each +1 extra byte
+#define CIR_SIZE SAMPLE_NUMBER * 6 + 1
+uint8_t cir_buffer[CIR_SIZE];
+int i = 0;
 
 void i2c_header(char status[], uint8_t base_address, uint8_t sub_address)
 {
@@ -357,20 +360,21 @@ int main(void)
                                         // peak path and first path shoul dbe similar
                                         printf("Peak path index = %d\n", ipk);
                                         printf("Peak path index_driver = %d\n", ipdiag.index_pp_u32 / 64);
-
+                                        uint32_t j=1;
                                         // reading CIR data
-                                        // for (int i = 1; i < 10; i*6+1) {
-                                        dwt_readaccdata(cir_buffer, cir_len, acc_offset);
-                                        k_msleep(2);
+                                        for (j =1 ,i = 1; i < CIR_SIZE; i = i + 6, j++)
+                                        {
+                                                dwt_readaccdata(cir_buffer, cir_len, acc_offset);
+                                                // k_msleep(2);
 
-                                        uint32_t raw_real = cir_buffer[1] | (cir_buffer[2] << 8) | (cir_buffer[3] << 16);
-                                        int32_t real_signed = (int32_t)(raw_real << 8) >> 8; // convert it to a signed integer to preserve the sign of the value using arithmic shift and casting
+                                                uint32_t raw_real = cir_buffer[i] | (cir_buffer[i + 1] << 8) | (cir_buffer[i + 2] << 16);
+                                                int32_t real_signed = (int32_t)(raw_real << 8) >> 8; // convert it to a signed integer to preserve the sign of the value using arithmic shift and casting
 
-                                        uint32_t raw_img = cir_buffer[4] | (cir_buffer[5] << 8) | (cir_buffer[6] << 16);
-                                        int32_t img_signed = (int32_t)(raw_img << 8) >> 8; // convert it to a signed integer to preserve the sign of the value using arithmic shift and casting
+                                                uint32_t raw_img = cir_buffer[i + 3] | (cir_buffer[i + 4] << 8) | (cir_buffer[i + 5] << 16);
+                                                int32_t img_signed = (int32_t)(raw_img << 8) >> 8; // convert it to a signed integer to preserve the sign of the value using arithmic shift and casting
 
-                                        printf("first CIR sample = %d + %dj\n", real_signed, img_signed);
-
+                                                printf(" CIR sample %d = %d + %dj\n", j, real_signed, img_signed);
+                                        }
                                         uint32_t poll_tx_ts, resp_rx_ts, poll_rx_ts, resp_tx_ts;
                                         int32_t rtd_init, rtd_resp;
                                         float clockOffsetRatio;
