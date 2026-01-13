@@ -29,7 +29,7 @@ static dwt_config_t config = {
 
 /* Default antenna delay values for 64 MHz PRF. See NOTE 2 below. */
 #define TX_ANT_DLY 16385
-#define RX_ANT_DLY 16385
+#define RX_ANT_DLY 16405
 
 #define SPEED_OF_LIGHT (299702547)
 #define FRAME_LEN_MAX (127)
@@ -67,7 +67,7 @@ static uint8_t rx_resp_msg[] = {0x41, 0x88, 0, 0xCA, 0xDE, 'T', 1, 'A', 1, '2', 
 float distances_storage[5];
 static uint8_t frame_seq_nb = 0;
 
-#define NUMBER_OF_ANCHORS 4
+#define NUMBER_OF_ANCHORS 3
 
 /* Buffer to store received response message.
  * Its size is adjusted to longest frame that this example code is supposed to handle. */
@@ -104,8 +104,8 @@ uint8_t systemStatus[20];
 uint8_t header[2];
 uint8_t clk_ctl[4];
 
-uint8_t read_buffer_size = 4;
-uint8_t h_size = sizeof(header);
+uint16_t read_buffer_size = 4;
+uint16_t h_size = sizeof(header);
 
 #define CLK_CTRL_BASE_ADDRESS 0x11
 #define CLK_CTRL_SUB_ADDRESS 0x04
@@ -124,26 +124,26 @@ uint8_t ipnacc[4];
 uint8_t ippeak[4];
 uint8_t rxpacc[4];
 uint8_t fp1[4];
+uint8_t ant[2];
 uint8_t minidiag[4];
 uint16_t acc_offset = 0;
-#define SAMPLE_NUMBER 500
-uint16_t cir_len = 501; // 10 samples of 6 bytes each +1 extra byte
+#define SAMPLE_NUMBER 1016
+uint16_t cir_len = (SAMPLE_NUMBER * 6) + 1; // 10 samples of 6 bytes each +1 extra byte
 #define CIR_SIZE SAMPLE_NUMBER * 6 + 1
 uint8_t cir_buffer[CIR_SIZE];
 int i = 0;
 
+#pragma GCC push_options // to turn off the optimization for this function from here
+#pragma GCC optimize("O0")
 void i2c_header(char status[], uint8_t base_address, uint8_t sub_address)
 {
 
         if (strcmp(status, "READ") == 0)
         {
+
                 uint16_t h = 0x4000;
-                uint16_t mask_base = 0x1F << 9;
-                uint8_t mask_sub = 0x7F;
-                h &= ~mask_base;
-                h |= base_address << 9;
-                h &= ~mask_sub;
-                h |= sub_address << 2;
+                h |= (base_address & 0x1F) << 9;
+                h |= (sub_address & 0x7F) << 2;
                 header[0] = (h & 0xFF00) >> 8;
                 header[1] = (h & 0x00FF);
         }
@@ -151,16 +151,13 @@ void i2c_header(char status[], uint8_t base_address, uint8_t sub_address)
         if (strcmp(status, "WRITE") == 0)
         {
                 uint16_t h = 0xC000;
-                uint16_t mask_base = 0x1F << 9;
-                uint8_t mask_sub = 0x7F;
-                h &= ~mask_base;
-                h |= base_address << 9;
-                h &= ~mask_sub;
-                h |= sub_address << 2;
+                h |= (base_address & 0x1F) << 9;
+                h |= (sub_address & 0x7F) << 2;
                 header[0] = (h & 0xFF00) >> 8;
                 header[1] = (h & 0x00FF);
         }
 }
+#pragma GCC pop_options // to here
 /*
 
 
@@ -240,12 +237,9 @@ int main(void)
          * As this example only handles one incoming frame with always the same delay and timeout, those values can be set here once for all. */
         dwt_setrxaftertxdelay(POLL_TX_TO_RESP_RX_DLY_UUS);
         dwt_setrxtimeout(RESP_RX_TIMEOUT_UUS);
-        // i2c_header("READ", RXPACC_BASE_ADDRESS, RXPACC_SUB_ADDRESS); // RxPACC
-        /* Next can enable TX/RX states output on GPIOs 5 and 6 to help debug, and also TX/RX LEDs
-         * Note, in real low power applications the LEDs should not be used. */
 
         ACC_CLK_ENABLE();
-        dwt_configciadiag(1);
+        dwt_configciadiag(1); // MINDIAG cleared to 0 t turn on the diagnostics
         // for (i = 1; i <= NUMBER_OF_ANCHORS; i++)
         // {
 
@@ -299,7 +293,7 @@ int main(void)
                         dwt_writesysstatuslo(DWT_INT_RXFCG_BIT_MASK);
 
                         dwt_writesysstatuslo(DWT_INT_RXPHD_BIT_MASK);
-                        uint16_t status2 = dwt_readsysstatuslo();
+                        // uint16_t status2 = dwt_readsysstatuslo();
                         // LOG_INF("status 2: %d", status2);
                         /* A frame has been received, read it into the local buffer. */
                         frame_len = dwt_getframelength();
@@ -313,19 +307,23 @@ int main(void)
                                 {
 
                                         dwt_readdiagnostics(&diagnostics);
-
                                         dwt_nlos_alldiag(&nlos_diagnostics);
-
                                         dwt_nlos_ipdiag(&ipdiag);
 
+                                        // fp1
                                         i2c_header("READ", FP1_BASE_ADDRESS, FP1_SUB_ADDRESS);
-                                        dw3000_spi_read(h_size, header, read_buffer_size, fp1); // fp1
-
+                                        dw3000_spi_read(h_size, header, read_buffer_size, fp1);
                                         k_msleep(5);
-                                        printf("f1  = %d\n", (fp1[0] | fp1[1] << 8 | fp1[2] << 16 | fp1[3] << 24) / 4);
+                                        reg32 =
+                                            ((uint32_t)fp1[0]) |
+                                            ((uint32_t)fp1[1] << 8) |
+                                            ((uint32_t)fp1[2] << 16) |
+                                            ((uint32_t)fp1[3] << 24);
+                                        ;
+                                        printf("FP1= %d\n", (reg32 & 0x003FFFFF) / 4);
 
                                         uint32_t check_ciaDone = dwt_readsysstatuslo();
-                                        printf("CIADONE in system status is  = %d\n", (check_ciaDone >> 10) & 0x01);
+                                        printf("CIADONE = %d\n", (check_ciaDone >> 10) & 0x01);
 
                                         i2c_header("READ", IPNACC_BASE_ADDRESS, IPNACC_SUB_ADDRESS); // RxPACC = IPNACC
                                         dw3000_spi_read(h_size, header, read_buffer_size, ipnacc);
@@ -346,7 +344,8 @@ int main(void)
                                             ((uint32_t)ippeak[2] << 16) |
                                             ((uint32_t)ippeak[3] << 24);
 
-                                        uint16_t ipk = (reg32 >> 21) & 0x03FF;
+                                        uint16_t ipk_index = (reg32 >> 21) & 0x03FF;
+                                        uint32_t ipk = reg32 & 0x001FFFFF;
 
                                         // extracted RXPACC via 3 different  ways to cross verify
                                         printf("IPNACC_manually = %d\n", ip);                                   // Extracted manually by myself
@@ -357,12 +356,13 @@ int main(void)
                                         printf("first path index = %d\n", diagnostics.ipatovFpIndex / 64);
 
                                         // extracted peak path index from dwt_nlos_ipdiag_t structure and manually to cross verify
-                                        // peak path and first path shoul dbe similar
-                                        printf("Peak path index = %d\n", ipk);
+                                        // peak path and first path should be similar
+                                        printf("Peak path amplitude = %d\n", ipk);
+                                        printf("Peak path index = %d\n", ipk_index);
                                         printf("Peak path index_driver = %d\n", ipdiag.index_pp_u32 / 64);
-                                        uint32_t j=1;
+                                        uint32_t j = 1;
                                         // reading CIR data
-                                        for (j =1 ,i = 1; i < CIR_SIZE; i = i + 6, j++)
+                                        for (j = 1, i = 1; i < CIR_SIZE; i = i + 6, j++)
                                         {
                                                 dwt_readaccdata(cir_buffer, cir_len, acc_offset);
                                                 // k_msleep(2);
@@ -372,8 +372,8 @@ int main(void)
 
                                                 uint32_t raw_img = cir_buffer[i + 3] | (cir_buffer[i + 4] << 8) | (cir_buffer[i + 5] << 16);
                                                 int32_t img_signed = (int32_t)(raw_img << 8) >> 8; // convert it to a signed integer to preserve the sign of the value using arithmic shift and casting
-
-                                                printf(" CIR sample %d = %d + %dj\n", j, real_signed, img_signed);
+                                                printf("%d + %dj\n", real_signed, img_signed);
+                                                // printf(" CIR sample %d = %d + %dj\n", j, real_signed, img_signed);
                                         }
                                         uint32_t poll_tx_ts, resp_rx_ts, poll_rx_ts, resp_tx_ts;
                                         int32_t rtd_init, rtd_resp;
@@ -395,14 +395,7 @@ int main(void)
 
                                         tof = ((rtd_init - rtd_resp * (1 - clockOffsetRatio)) / 2.0) * DWT_TIME_UNITS;
                                         distance = tof * SPEED_OF_LIGHT;
-                                        //   dwt_nlos_alldiag(&nlos_diagnostics);
-                                        //    printf("ipatovAccumCount2 = %d\n", nlos_diagnostics.accumCount);
-
-                                        // distance = distance * 100; // convert to cm
-                                        /* Display computed distance on LCD. */
-                                        // printf("DIST %d: %3.2f\n", i, distance);
-
-                                        // printk();
+                                        printf("DIST: %3.2f m\n", distance);
 
                                         k_msleep(50);
                                         // break;
