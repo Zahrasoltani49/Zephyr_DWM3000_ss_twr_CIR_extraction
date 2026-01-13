@@ -29,7 +29,7 @@ static dwt_config_t config = {
 
 /* Default antenna delay values for 64 MHz PRF. See NOTE 2 below. */
 #define TX_ANT_DLY 16385
-#define RX_ANT_DLY 16405
+#define RX_ANT_DLY 16385
 
 #define SPEED_OF_LIGHT (299702547)
 #define FRAME_LEN_MAX (127)
@@ -124,7 +124,6 @@ uint8_t ipnacc[4];
 uint8_t ippeak[4];
 uint8_t rxpacc[4];
 uint8_t fp1[4];
-uint8_t ant[2];
 uint8_t minidiag[4];
 uint16_t acc_offset = 0;
 #define SAMPLE_NUMBER 1016
@@ -237,6 +236,17 @@ int main(void)
          * As this example only handles one incoming frame with always the same delay and timeout, those values can be set here once for all. */
         dwt_setrxaftertxdelay(POLL_TX_TO_RESP_RX_DLY_UUS);
         dwt_setrxtimeout(RESP_RX_TIMEOUT_UUS);
+
+        i2c_header("READ", MINIDIAG_BIT_BASE_ADDRESS, MINIDIAG_BIT_SUB_ADDRESS);
+        dw3000_spi_read(h_size, header, read_buffer_size, minidiag);
+
+        reg32 =
+            ((uint32_t)minidiag[0]) |
+            ((uint32_t)minidiag[1] << 8) |
+            ((uint32_t)minidiag[2] << 16) |
+            ((uint32_t)minidiag[3] << 24);
+        ;
+        printf("MINDIAG is = %d\n", (reg32 & 0x00100000) >> 20);
 
         ACC_CLK_ENABLE();
         dwt_configciadiag(1); // MINDIAG cleared to 0 t turn on the diagnostics
