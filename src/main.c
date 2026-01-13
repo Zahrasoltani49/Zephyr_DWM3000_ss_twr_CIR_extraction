@@ -103,10 +103,11 @@ uint8_t systemEnable[4];
 uint8_t systemStatus[20];
 uint8_t header[2];
 uint8_t clk_ctl[4];
-
+uint8_t DGC_CDG[2] = {0};
+uint8_t DGC_DBG[4] = {0};
 uint16_t read_buffer_size = 4;
 uint16_t h_size = sizeof(header);
-
+uint8_t d;
 #define CLK_CTRL_BASE_ADDRESS 0x11
 #define CLK_CTRL_SUB_ADDRESS 0x04
 #define MINIDIAG_BIT_BASE_ADDRESS 0x0E
@@ -119,7 +120,12 @@ uint16_t h_size = sizeof(header);
 #define IPNACC_SUB_ADDRESS 0x58
 #define IP_DIAG_0_BASE_ADDRESS 0x0C
 #define IP_DIAG_0_SUB_ADDRESS 0x28
-uint32_t reg32;
+#define DGC_CDG_BASE_ADDRESS 0x03
+#define DGC_CDG_SUB_ADDRESS 0x18
+#define DGC_DBG_BASE_ADDRESS 0x03
+#define DGC_DBG_SUB_ADDRESS 0x60
+uint32_t reg32 = 0;
+uint16_t reg16 = 0;
 uint8_t ipnacc[4];
 uint8_t ippeak[4];
 uint8_t rxpacc[4];
@@ -357,6 +363,32 @@ int main(void)
                                         uint16_t ipk_index = (reg32 >> 21) & 0x03FF;
                                         uint32_t ipk = reg32 & 0x001FFFFF;
 
+                                        i2c_header("READ", DGC_CDG_BASE_ADDRESS, DGC_CDG_SUB_ADDRESS); // Peak path index
+                                        dw3000_spi_read(h_size, header, read_buffer_size, DGC_CDG);
+                                        k_msleep(5);
+                                        reg16 =
+                                            ((uint16_t)DGC_CDG[0]) |
+                                            ((uint16_t)DGC_CDG[1] << 8);
+                                        printf("DGC_CDG = %d\n", reg16); // RX tune configuration which is mandatory
+
+                                        if (((reg16 >> 9) & 0x3F) == 0x32)
+                                        {
+                                                i2c_header("READ", DGC_DBG_BASE_ADDRESS, DGC_DBG_SUB_ADDRESS);
+                                                dw3000_spi_read(h_size, header, read_buffer_size, DGC_DBG);
+                                                k_msleep(5);
+                                                reg32 =
+                                                    ((uint32_t)DGC_DBG[0]) |
+                                                    ((uint32_t)DGC_DBG[1] << 8) |
+                                                    ((uint32_t)DGC_DBG[2] << 16) |
+                                                    ((uint32_t)DGC_DBG[3] << 24);
+                                                d = (reg32 >> 28) & 0x7;
+                                                printf("DGC_DBG = %d\n", d); // D value in page 48 formula
+                                        }
+                                        else
+                                        {
+                                                LOG_ERR("RX tune configuration is not set properly! \n");
+                                        }
+
                                         // extracted RXPACC via 3 different  ways to cross verify
                                         printf("IPNACC_manually = %d\n", ip);                                   // Extracted manually by myself
                                         printf("RXPACC_nlos_structure = %d\n", nlos_diagnostics.accumCount);    // extracted from dwt_nlos_alldiag_t structure,  should be same as ip extracted manually
@@ -372,19 +404,19 @@ int main(void)
                                         printf("Peak path index_driver = %d\n", ipdiag.index_pp_u32 / 64);
                                         uint32_t j = 1;
                                         // reading CIR data
-                                        for (j = 1, i = 1; i < CIR_SIZE; i = i + 6, j++)
-                                        {
-                                                dwt_readaccdata(cir_buffer, cir_len, acc_offset);
-                                                // k_msleep(2);
+                                        // for (j = 1, i = 1; i < CIR_SIZE; i = i + 6, j++)
+                                        // {
+                                        //         dwt_readaccdata(cir_buffer, cir_len, acc_offset);
+                                        //         // k_msleep(2);
 
-                                                uint32_t raw_real = cir_buffer[i] | (cir_buffer[i + 1] << 8) | (cir_buffer[i + 2] << 16);
-                                                int32_t real_signed = (int32_t)(raw_real << 8) >> 8; // convert it to a signed integer to preserve the sign of the value using arithmic shift and casting
+                                        //         uint32_t raw_real = cir_buffer[i] | (cir_buffer[i + 1] << 8) | (cir_buffer[i + 2] << 16);
+                                        //         int32_t real_signed = (int32_t)(raw_real << 8) >> 8; // convert it to a signed integer to preserve the sign of the value using arithmic shift and casting
 
-                                                uint32_t raw_img = cir_buffer[i + 3] | (cir_buffer[i + 4] << 8) | (cir_buffer[i + 5] << 16);
-                                                int32_t img_signed = (int32_t)(raw_img << 8) >> 8; // convert it to a signed integer to preserve the sign of the value using arithmic shift and casting
-                                                printf("%d + %dj\n", real_signed, img_signed);
-                                                // printf(" CIR sample %d = %d + %dj\n", j, real_signed, img_signed);
-                                        }
+                                        //         uint32_t raw_img = cir_buffer[i + 3] | (cir_buffer[i + 4] << 8) | (cir_buffer[i + 5] << 16);
+                                        //         int32_t img_signed = (int32_t)(raw_img << 8) >> 8; // convert it to a signed integer to preserve the sign of the value using arithmic shift and casting
+                                        //         printf("%d + %dj\n", real_signed, img_signed);
+                                        //         // printf(" CIR sample %d = %d + %dj\n", j, real_signed, img_signed);
+                                        // }
                                         uint32_t poll_tx_ts, resp_rx_ts, poll_rx_ts, resp_tx_ts;
                                         int32_t rtd_init, rtd_resp;
                                         float clockOffsetRatio;
